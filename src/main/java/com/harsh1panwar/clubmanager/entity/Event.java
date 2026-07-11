@@ -45,8 +45,8 @@ public class Event {
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
-//    @OneToMany(mappedBy = "event", cascade = CascadeType.ALL)
-//    private List<Registration> registrations;
+    @OneToMany(mappedBy = "event", cascade = CascadeType.ALL)
+    private List<Registration> registrations;
 
     @PrePersist
     protected void onCreate() {
