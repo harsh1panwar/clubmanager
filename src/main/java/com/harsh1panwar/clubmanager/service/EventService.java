@@ -5,12 +5,14 @@ import com.harsh1panwar.clubmanager.dto.EventResponse;
 import com.harsh1panwar.clubmanager.dto.RegistrationResponse;
 import com.harsh1panwar.clubmanager.entity.*;
 import com.harsh1panwar.clubmanager.repository.*;
+import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import java.util.List;
 
 @Service
 @RequiredArgsConstructor
+@Transactional
 public class EventService {
 
     private final EventRepository eventRepository;

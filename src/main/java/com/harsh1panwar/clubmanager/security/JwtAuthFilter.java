@@ -27,7 +27,10 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                                     FilterChain filterChain)
             throws ServletException, IOException {
 
+        System.out.println("=== FILTER HIT: " + request.getRequestURI() + " ===");
+
         String authHeader = request.getHeader("Authorization");
+        System.out.println("=== AUTH HEADER: " + authHeader + " ===");
 
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             filterChain.doFilter(request, response);
@@ -38,13 +41,15 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         try {
             String email = jwtService.extractEmail(token);
+            System.out.println("=== EMAIL EXTRACTED: " + email + " ===");
+            System.out.println("=== TOKEN VALID: " + jwtService.isTokenValid(token, email) + " ===");
 
             if (email != null &&
                     SecurityContextHolder.getContext().getAuthentication() == null) {
 
                 if (jwtService.isTokenValid(token, email)) {
-
                     String role = jwtService.extractRole(token);
+                    System.out.println("=== ROLE: " + role + " ===");
 
                     UsernamePasswordAuthenticationToken authToken =
                             new UsernamePasswordAuthenticationToken(
@@ -58,12 +63,14 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     );
 
                     SecurityContextHolder.getContext().setAuthentication(authToken);
+                    System.out.println("=== AUTHENTICATION SET ===");
                 }
             }
         } catch (Exception e) {
-            // Invalid token — Security layer 401 handle karegi
+            System.out.println("=== JWT ERROR: " + e.getMessage() + " ===");
         }
 
         filterChain.doFilter(request, response);
     }
+
 }
