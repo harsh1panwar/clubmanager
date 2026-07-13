@@ -1,5 +1,5 @@
 package com.harsh1panwar.clubmanager.controller;
-
+import com.harsh1panwar.clubmanager.security.TotpService;
 import com.harsh1panwar.clubmanager.dto.EventRequest;
 import com.harsh1panwar.clubmanager.dto.EventResponse;
 import com.harsh1panwar.clubmanager.dto.RegistrationResponse;
@@ -10,13 +10,37 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/events")
 @RequiredArgsConstructor
 public class EventController {
+    // Constructor mein TotpService inject karo
+    private final TotpService totpService;
 
+    // Organizer ke screen pe live QR token
+    @GetMapping("/{id}/live-qr")
+    public ResponseEntity<Map<String, String>> getLiveQr(@PathVariable Long id) {
+        String token = totpService.generateToken(id);
+        return ResponseEntity.ok(Map.of(
+                "token", token,
+                "expiresInSeconds", String.valueOf(
+                        30 - (System.currentTimeMillis() / 1000 % 30))
+        ));
+    }
     private final EventService eventService;
+    // Attendee check-in
+    @PostMapping("/{id}/check-in")
+    public ResponseEntity<Map<String, String>> checkIn(
+            @PathVariable Long id,
+            @RequestBody Map<String, String> body,
+            @AuthenticationPrincipal String email) {
+        String scannedToken = body.get("token");
+        eventService.checkIn(id, email, scannedToken);
+        return ResponseEntity.ok(Map.of("message", "Attendance marked successfully"));
+    }
+
 
     @PostMapping
     public ResponseEntity<EventResponse> createEvent(

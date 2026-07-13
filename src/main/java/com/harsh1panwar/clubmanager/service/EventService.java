@@ -5,9 +5,12 @@ import com.harsh1panwar.clubmanager.dto.EventResponse;
 import com.harsh1panwar.clubmanager.dto.RegistrationResponse;
 import com.harsh1panwar.clubmanager.entity.*;
 import com.harsh1panwar.clubmanager.repository.*;
+import com.harsh1panwar.clubmanager.security.TotpService;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -19,6 +22,7 @@ public class EventService {
     private final ClubRepository clubRepository;
     private final UserRepository userRepository;
     private final RegistrationRepository registrationRepository;
+    private final TotpService totpService;
 
     // Organizer event create kare
     public EventResponse createEvent(EventRequest request, String organizerEmail) {
@@ -46,6 +50,30 @@ public class EventService {
 
         Event saved = eventRepository.save(event);
         return mapToResponse(saved);
+    }
+    public void checkIn(Long eventId, String userEmail, String scannedToken) {
+
+        // Token valid hai?
+        if (!totpService.validateToken(eventId, scannedToken)) {
+            throw new RuntimeException("Invalid or expired QR code");
+        }
+
+        User user = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        // User is event ke liye registered hai?
+        Registration registration = registrationRepository
+                .findByUserIdAndEventId(user.getId(), eventId)
+                .orElseThrow(() -> new RuntimeException("Not registered for this event"));
+
+        // Already checked in?
+        if (registration.isAttended()) {
+            throw new RuntimeException("Already checked in");
+        }
+
+        registration.setAttended(true);
+        registration.setAttendedAt(LocalDateTime.now());
+        registrationRepository.save(registration);
     }
 
     // Sabhi events dekhna
