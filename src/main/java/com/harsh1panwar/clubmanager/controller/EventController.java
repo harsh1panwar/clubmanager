@@ -1,4 +1,9 @@
 package com.harsh1panwar.clubmanager.controller;
+import jakarta.servlet.http.HttpServletResponse;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.MultiFormatWriter;
+import com.google.zxing.common.BitMatrix;
+import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.harsh1panwar.clubmanager.security.TotpService;
 import com.harsh1panwar.clubmanager.dto.EventRequest;
 import com.harsh1panwar.clubmanager.dto.EventResponse;
@@ -28,6 +33,16 @@ public class EventController {
                 "expiresInSeconds", String.valueOf(
                         30 - (System.currentTimeMillis() / 1000 % 30))
         ));
+    }
+    @GetMapping("/{id}/live-qr-image")
+    public void getLiveQrImage(@PathVariable Long id, HttpServletResponse response) throws Exception {
+        String token = totpService.generateToken(id);
+
+        BitMatrix bitMatrix = new MultiFormatWriter().encode(
+                token, BarcodeFormat.QR_CODE, 300, 300);
+
+        response.setContentType("image/png");
+        MatrixToImageWriter.writeToStream(bitMatrix, "PNG", response.getOutputStream());
     }
     private final EventService eventService;
     // Attendee check-in

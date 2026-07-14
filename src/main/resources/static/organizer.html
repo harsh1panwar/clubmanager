@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Organizer - Live QR</title>
+</head>
+<body>
+<h2>Organizer Panel</h2>
+<p id="userInfo"></p>
+
+<label>Event ID: </label>
+<input type="number" id="eventId" placeholder="Event ID" />
+<button onclick="startQr()">Show Live QR</button>
+<button onclick="stopQr()">Stop</button>
+
+<br><br>
+<img id="qrImage" src="" alt="QR will appear here" width="300" height="300" />
+
+<script>
+    const token = localStorage.getItem("token");
+    const role = localStorage.getItem("role");
+
+    // auth check
+    if (!token || role !== "ORGANIZER") {
+        window.location.href = "login.html";
+    }
+
+    document.getElementById("userInfo").innerText = "Logged in as: " + localStorage.getItem("name");
+
+    let intervalId = null;
+
+    async function refreshQr(eventId) {
+        const res = await fetch(`/api/events/${eventId}/live-qr-image`, {
+            headers: { "Authorization": "Bearer " + token }
+        });
+
+        if (!res.ok) {
+            alert("Failed to load QR. Check event ID or login again.");
+            stopQr();
+            return;
+        }
+
+        const blob = await res.blob();
+        document.getElementById("qrImage").src = URL.createObjectURL(blob);
+    }
+
+    function startQr() {
+        const eventId = document.getElementById("eventId").value;
+        if (!eventId) {
+            alert("Enter event ID first");
+            return;
+        }
+
+        refreshQr(eventId); // turant pehli baar
+        intervalId = setInterval(() => refreshQr(eventId), 25000); // har 25 sec refresh
+    }
+
+    function stopQr() {
+        if (intervalId) {
+            clearInterval(intervalId);
+            intervalId = null;
+        }
+        document.getElementById("qrImage").src = "";
+    }
+</script>
+</body>
+</html>

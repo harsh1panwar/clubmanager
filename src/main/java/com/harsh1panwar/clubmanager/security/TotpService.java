@@ -23,7 +23,8 @@ public class TotpService {
     public boolean validateToken(Long eventId, String scannedToken) {
         long timeWindow = System.currentTimeMillis() / 1000 / WINDOW_SECONDS;
         return computeHmac(eventId, timeWindow).equals(scannedToken)
-                || computeHmac(eventId, timeWindow - 1).equals(scannedToken);
+                || computeHmac(eventId, timeWindow - 1).equals(scannedToken)
+                || computeHmac(eventId, timeWindow - 2).equals(scannedToken);
     }
 
     private String computeHmac(Long eventId, long timeWindow) {
