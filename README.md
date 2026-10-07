@@ -118,7 +118,7 @@ Set the following environment variables:
 
 ```text
 DB_PASSWORD=<your-postgres-password>
-JWT_SECRET=<your-random-secret>
+APP_JWT_SECRET=<your-random-secret>
 ```
 
 Do not commit passwords or application secrets to the repository.
