@@ -1,21 +1,31 @@
 package com.harsh1panwar.clubmanager.service;
 
+import com.harsh1panwar.clubmanager.dto.AttendeeResponse;
 import com.harsh1panwar.clubmanager.dto.EventRequest;
 import com.harsh1panwar.clubmanager.dto.EventResponse;
 import com.harsh1panwar.clubmanager.dto.RegistrationResponse;
-import com.harsh1panwar.clubmanager.entity.*;
-import com.harsh1panwar.clubmanager.repository.*;
+import com.harsh1panwar.clubmanager.entity.Club;
+import com.harsh1panwar.clubmanager.entity.Event;
+import com.harsh1panwar.clubmanager.entity.Registration;
+import com.harsh1panwar.clubmanager.entity.User;
+import com.harsh1panwar.clubmanager.exception.ApiException;
+import com.harsh1panwar.clubmanager.repository.ClubRepository;
+import com.harsh1panwar.clubmanager.repository.EventRepository;
+import com.harsh1panwar.clubmanager.repository.RegistrationRepository;
+import com.harsh1panwar.clubmanager.repository.UserRepository;
 import com.harsh1panwar.clubmanager.security.TotpService;
-import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
-@Transactional
+@Transactional(readOnly = true)
 public class EventService {
 
     private final EventRepository eventRepository;
@@ -24,24 +34,23 @@ public class EventService {
     private final RegistrationRepository registrationRepository;
     private final TotpService totpService;
 
-    // Organizer event create kare
-    public EventResponse createEvent(EventRequest request, String organizerEmail) {
+    // ---------- Organizer ----------
 
-        User organizer = userRepository.findByEmail(organizerEmail)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+    @Transactional
+    public EventResponse createEvent(EventRequest request, String organizerEmail) {
+        User organizer = findUser(organizerEmail);
 
         Club club = clubRepository.findById(request.getClubId())
-                .orElseThrow(() -> new RuntimeException("Club not found"));
+                .orElseThrow(() -> ApiException.notFound("Club not found"));
 
-        // Sirf club ka owner event create kar sakta hai
         if (!club.getOwner().getId().equals(organizer.getId())) {
-            throw new RuntimeException("Only club owner can create events");
+            throw ApiException.forbidden("Only the club owner can create events for this club");
         }
 
         Event event = Event.builder()
-                .title(request.getTitle())
+                .title(request.getTitle().trim())
                 .description(request.getDescription())
-                .location(request.getLocation())
+                .location(request.getLocation().trim())
                 .eventDate(request.getEventDate())
                 .capacity(request.getCapacity())
                 .club(club)
@@ -49,87 +58,133 @@ public class EventService {
                 .build();
 
         Event saved = eventRepository.save(event);
-        return mapToResponse(saved);
+        return toResponse(saved, 0);
     }
-    public void checkIn(Long eventId, String userEmail, String scannedToken) {
 
-        // Token valid hai?
-        if (!totpService.validateToken(eventId, scannedToken)) {
-            throw new RuntimeException("Invalid or expired QR code");
+    public List<EventResponse> getMyEvents(String organizerEmail) {
+        User organizer = findUser(organizerEmail);
+        return toResponses(eventRepository.findByOrganizerIdOrderByEventDateAsc(organizer.getId()));
+    }
+
+    /** Throws 403 unless the given user organizes this event. Used before showing the live QR. */
+    public void assertOrganizerOwns(Long eventId, String organizerEmail) {
+        User organizer = findUser(organizerEmail);
+        Event event = eventRepository.findById(eventId)
+                .orElseThrow(() -> ApiException.notFound("Event not found"));
+        if (!event.getOrganizer().getId().equals(organizer.getId())) {
+            throw ApiException.forbidden("You are not the organizer of this event");
+        }
+    }
+
+    public List<AttendeeResponse> getAttendees(Long eventId, String organizerEmail) {
+        assertOrganizerOwns(eventId, organizerEmail);
+        return registrationRepository.findByEventIdOrderByRegisteredAtAsc(eventId).stream()
+                .map(r -> AttendeeResponse.builder()
+                        .registrationId(r.getId())
+                        .name(r.getUser().getName())
+                        .email(r.getUser().getEmail())
+                        .registeredAt(r.getRegisteredAt())
+                        .attended(r.isAttended())
+                        .attendedAt(r.getAttendedAt())
+                        .build())
+                .toList();
+    }
+
+    // ---------- Everyone ----------
+
+    public List<EventResponse> getAllEvents() {
+        return toResponses(eventRepository.findAllByOrderByEventDateAsc());
+    }
+
+    public EventResponse getEventById(Long id) {
+        Event event = eventRepository.findWithDetailsById(id)
+                .orElseThrow(() -> ApiException.notFound("Event not found"));
+        return toResponse(event, registrationRepository.countByEventId(id));
+    }
+
+    // ---------- Attendee ----------
+
+    @Transactional
+    public RegistrationResponse registerForEvent(Long eventId, String userEmail) {
+        User user = findUser(userEmail);
+
+        Event event = eventRepository.findWithDetailsById(eventId)
+                .orElseThrow(() -> ApiException.notFound("Event not found"));
+
+        if (event.getEventDate().isBefore(LocalDateTime.now().minusHours(12))) {
+            throw ApiException.badRequest("Registration is closed: this event is already over");
         }
 
-        User user = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+        if (registrationRepository.existsByUserIdAndEventId(user.getId(), eventId)) {
+            throw ApiException.conflict("Already registered for this event");
+        }
 
-        // User is event ke liye registered hai?
+        if (registrationRepository.countByEventId(eventId) >= event.getCapacity()) {
+            throw ApiException.conflict("Event is full");
+        }
+
+        Registration saved = registrationRepository.save(
+                Registration.builder().user(user).event(event).build());
+
+        return toRegistrationResponse(saved);
+    }
+
+    /**
+     * Marks attendance for the logged-in attendee. Because the token rotates every
+     * 30 seconds and attendance is tied to the authenticated account, a shared
+     * screenshot cannot be used to mark someone else present.
+     */
+    @Transactional
+    public RegistrationResponse checkIn(Long eventId, String userEmail, String scannedToken) {
+        if (!totpService.validateToken(eventId, scannedToken)) {
+            throw ApiException.badRequest("Invalid or expired QR code — scan the live code again");
+        }
+
+        User user = findUser(userEmail);
+
         Registration registration = registrationRepository
-                .findByUserIdAndEventId(user.getId(), eventId)
-                .orElseThrow(() -> new RuntimeException("Not registered for this event"));
+                .findWithDetailsByUserIdAndEventId(user.getId(), eventId)
+                .orElseThrow(() -> ApiException.forbidden("You are not registered for this event"));
 
-        // Already checked in?
         if (registration.isAttended()) {
-            throw new RuntimeException("Already checked in");
+            throw ApiException.conflict("Already checked in");
         }
 
         registration.setAttended(true);
         registration.setAttendedAt(LocalDateTime.now());
-        registrationRepository.save(registration);
+        return toRegistrationResponse(registrationRepository.save(registration));
     }
 
-    // Sabhi events dekhna
-    public List<EventResponse> getAllEvents() {
-        return eventRepository.findAll()
-                .stream()
-                .map(this::mapToResponse)
+    public List<RegistrationResponse> getMyRegistrations(String userEmail) {
+        User user = findUser(userEmail);
+        return registrationRepository.findByUserIdOrderByRegisteredAtDesc(user.getId()).stream()
+                .map(this::toRegistrationResponse)
                 .toList();
     }
 
-    // Ek event ki details
-    public EventResponse getEventById(Long id) {
-        Event event = eventRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Event not found"));
-        return mapToResponse(event);
+    // ---------- Helpers ----------
+
+    private User findUser(String email) {
+        return userRepository.findByEmail(email)
+                .orElseThrow(() -> ApiException.notFound("User not found"));
     }
 
-    // Attendee event mein register kare
-    public RegistrationResponse registerForEvent(Long eventId, String userEmail) {
-
-        User user = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        Event event = eventRepository.findById(eventId)
-                .orElseThrow(() -> new RuntimeException("Event not found"));
-
-        // Already registered?
-        if (registrationRepository.existsByUserIdAndEventId(user.getId(), eventId)) {
-            throw new RuntimeException("Already registered for this event");
+    /** Maps a list of events using one grouped COUNT query for all registration counts. */
+    private List<EventResponse> toResponses(List<Event> events) {
+        if (events.isEmpty()) {
+            return List.of();
         }
-
-        // Capacity check
-        int currentCount = registrationRepository.countByEventId(eventId);
-        if (currentCount >= event.getCapacity()) {
-            throw new RuntimeException("Event is full");
+        Map<Long, Long> counts = new HashMap<>();
+        for (Object[] row : registrationRepository.countGroupedByEventIds(
+                events.stream().map(Event::getId).toList())) {
+            counts.put((Long) row[0], (Long) row[1]);
         }
-
-        Registration registration = Registration.builder()
-                .user(user)
-                .event(event)
-                .build();
-
-        Registration saved = registrationRepository.save(registration);
-
-        return RegistrationResponse.builder()
-                .id(saved.getId())
-                .eventTitle(event.getTitle())
-                .eventLocation(event.getLocation())
-                .eventDate(event.getEventDate())
-                .registeredAt(saved.getRegisteredAt())
-                .attended(saved.isAttended())
-                .build();
+        return events.stream()
+                .map(e -> toResponse(e, counts.getOrDefault(e.getId(), 0L).intValue()))
+                .toList();
     }
 
-    // Entity → DTO convert karna
-    private EventResponse mapToResponse(Event event) {
+    private EventResponse toResponse(Event event, int registeredCount) {
         return EventResponse.builder()
                 .id(event.getId())
                 .title(event.getTitle())
@@ -137,10 +192,25 @@ public class EventService {
                 .location(event.getLocation())
                 .eventDate(event.getEventDate())
                 .capacity(event.getCapacity())
-                .registeredCount(registrationRepository.countByEventId(event.getId()))
+                .registeredCount(registeredCount)
                 .clubName(event.getClub().getName())
                 .organizerName(event.getOrganizer().getName())
                 .createdAt(event.getCreatedAt())
+                .build();
+    }
+
+    private RegistrationResponse toRegistrationResponse(Registration r) {
+        Event event = r.getEvent();
+        return RegistrationResponse.builder()
+                .id(r.getId())
+                .eventId(event.getId())
+                .eventTitle(event.getTitle())
+                .eventLocation(event.getLocation())
+                .clubName(event.getClub().getName())
+                .eventDate(event.getEventDate())
+                .registeredAt(r.getRegisteredAt())
+                .attended(r.isAttended())
+                .attendedAt(r.getAttendedAt())
                 .build();
     }
 }
