@@ -1,10 +1,11 @@
 package com.harsh1panwar.clubmanager.controller;
 
-import com.harsh1panwar.clubmanager.entity.Club;
-import com.harsh1panwar.clubmanager.entity.User;
-import com.harsh1panwar.clubmanager.repository.ClubRepository;
-import com.harsh1panwar.clubmanager.repository.UserRepository;
+import com.harsh1panwar.clubmanager.dto.ClubRequest;
+import com.harsh1panwar.clubmanager.dto.ClubResponse;
+import com.harsh1panwar.clubmanager.service.ClubService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -16,24 +17,21 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ClubController {
 
-    private final ClubRepository clubRepository;
-    private final UserRepository userRepository;
+    private final ClubService clubService;
 
     @PostMapping
-    public ResponseEntity<Club> createClub(
-            @RequestBody Club club,
-            @AuthenticationPrincipal String email) {
-
-        User owner = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        club.setOwner(owner);
-        Club saved = clubRepository.save(club);
-        return ResponseEntity.ok(saved);
+    public ResponseEntity<ClubResponse> createClub(@Valid @RequestBody ClubRequest request,
+                                                   @AuthenticationPrincipal String email) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(clubService.createClub(request, email));
     }
 
     @GetMapping
-    public ResponseEntity<List<Club>> getAllClubs() {
-        return ResponseEntity.ok(clubRepository.findAll());
+    public ResponseEntity<List<ClubResponse>> getAllClubs() {
+        return ResponseEntity.ok(clubService.getAllClubs());
+    }
+
+    @GetMapping("/mine")
+    public ResponseEntity<List<ClubResponse>> getMyClubs(@AuthenticationPrincipal String email) {
+        return ResponseEntity.ok(clubService.getMyClubs(email));
     }
 }
