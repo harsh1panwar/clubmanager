@@ -5,6 +5,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -15,6 +16,13 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.List;
 
+/**
+ * Runs once per request: reads "Authorization: Bearer <jwt>", validates it and,
+ * if valid, puts the user's email + role into the SecurityContext. Requests
+ * without a valid token continue unauthenticated and are rejected later by
+ * the rules in SecurityConfig.
+ */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class JwtAuthFilter extends OncePerRequestFilter {
@@ -27,50 +35,38 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                                     FilterChain filterChain)
             throws ServletException, IOException {
 
-        System.out.println("=== FILTER HIT: " + request.getRequestURI() + " ===");
-
         String authHeader = request.getHeader("Authorization");
-        System.out.println("=== AUTH HEADER: " + authHeader + " ===");
 
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             filterChain.doFilter(request, response);
             return;
         }
 
-        String token = authHeader.substring(7);
+        String token = authHeader.substring(7).trim();
 
         try {
             String email = jwtService.extractEmail(token);
-            System.out.println("=== EMAIL EXTRACTED: " + email + " ===");
-            System.out.println("=== TOKEN VALID: " + jwtService.isTokenValid(token, email) + " ===");
 
-            if (email != null &&
-                    SecurityContextHolder.getContext().getAuthentication() == null) {
+            if (email != null
+                    && SecurityContextHolder.getContext().getAuthentication() == null
+                    && jwtService.isTokenValid(token, email)) {
 
-                if (jwtService.isTokenValid(token, email)) {
-                    String role = jwtService.extractRole(token);
-                    System.out.println("=== ROLE: " + role + " ===");
+                String role = jwtService.extractRole(token);
 
-                    UsernamePasswordAuthenticationToken authToken =
-                            new UsernamePasswordAuthenticationToken(
-                                    email,
-                                    null,
-                                    List.of(new SimpleGrantedAuthority("ROLE_" + role))
-                            );
+                UsernamePasswordAuthenticationToken authToken =
+                        new UsernamePasswordAuthenticationToken(
+                                email,
+                                null,
+                                List.of(new SimpleGrantedAuthority("ROLE_" + role)));
 
-                    authToken.setDetails(
-                            new WebAuthenticationDetailsSource().buildDetails(request)
-                    );
-
-                    SecurityContextHolder.getContext().setAuthentication(authToken);
-                    System.out.println("=== AUTHENTICATION SET ===");
-                }
+                authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                SecurityContextHolder.getContext().setAuthentication(authToken);
             }
         } catch (Exception e) {
-            System.out.println("=== JWT ERROR: " + e.getMessage() + " ===");
+            // Expired / tampered token: leave the request unauthenticated
+            log.debug("Rejected JWT on {}: {}", request.getRequestURI(), e.getMessage());
         }
 
         filterChain.doFilter(request, response);
     }
-
 }
