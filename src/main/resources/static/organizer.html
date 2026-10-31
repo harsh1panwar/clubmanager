@@ -1,66 +1,279 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Organizer - Live QR</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClubPass · Organizer</title>
+  <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-<h2>Organizer Panel</h2>
-<p id="userInfo"></p>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark"></span>ClubPass</div>
+  <div class="who"><span>Organizer <strong id="who-name"></strong></span><button class="link" id="logout">Log out</button></div>
+</header>
 
-<label>Event ID: </label>
-<input type="number" id="eventId" placeholder="Event ID" />
-<button onclick="startQr()">Show Live QR</button>
-<button onclick="stopQr()">Stop</button>
+<main class="page">
+  <div class="columns">
+    <aside>
+      <section class="panel">
+        <h2>New club</h2>
+        <form id="club-form" novalidate>
+          <label for="club-name">Club name</label>
+          <input id="club-name" required maxlength="255">
+          <label for="club-desc">What the club does</label>
+          <textarea id="club-desc" maxlength="500"></textarea>
+          <button type="submit" class="full secondary">Create club</button>
+        </form>
+        <div id="club-msg" class="msg" role="status"></div>
+      </section>
 
-<br><br>
-<img id="qrImage" src="" alt="QR will appear here" width="300" height="300" />
+      <section class="panel">
+        <h2>New event</h2>
+        <form id="event-form" novalidate>
+          <label for="ev-club">Club</label>
+          <select id="ev-club" required></select>
+          <label for="ev-title">Title</label>
+          <input id="ev-title" required>
+          <label for="ev-desc">Description</label>
+          <textarea id="ev-desc" maxlength="1000"></textarea>
+          <label for="ev-location">Venue</label>
+          <input id="ev-location" required>
+          <div class="row">
+            <div>
+              <label for="ev-date">Starts</label>
+              <input id="ev-date" type="datetime-local" required>
+            </div>
+            <div>
+              <label for="ev-cap">Seats</label>
+              <input id="ev-cap" type="number" min="1" value="50" required>
+            </div>
+          </div>
+          <button type="submit" class="full">Create event</button>
+        </form>
+        <div id="event-msg" class="msg" role="status"></div>
+      </section>
+    </aside>
 
+    <section class="panel">
+      <h2>Your events</h2>
+      <p class="hint">Open the live check-in on the venue screen when the event starts. The code changes every 30 seconds.</p>
+      <div id="events"></div>
+    </section>
+  </div>
+</main>
+
+<!-- Live check-in pass -->
+<div class="pass-overlay" id="pass" role="dialog" aria-modal="true" aria-labelledby="pass-title">
+  <div class="pass">
+    <div class="pass-stub">
+      <h2 id="pass-title"></h2>
+      <p class="meta" id="pass-meta"></p>
+      <div class="qr-frame"><img id="qr" alt="Live check-in QR code"></div>
+      <div class="ring" aria-live="off">
+        <svg width="40" height="40" viewBox="0 0 40 40">
+          <circle class="track" cx="20" cy="20" r="16"></circle>
+          <circle class="bar" id="ring-bar" cx="20" cy="20" r="16" stroke-dasharray="100.5" stroke-dashoffset="0"></circle>
+        </svg>
+        <span>New code in <span id="ring-secs">30</span>s</span>
+      </div>
+    </div>
+    <div class="pass-body">
+      <h2>Scan to check in</h2>
+      <p class="hint">Students open ClubPass on their phone, tap "Check in" on this event and scan the code.</p>
+      <div class="counts">
+        <div><b id="count-in">0</b><span>checked in</span></div>
+        <div><b id="count-reg">0</b><span>registered</span></div>
+      </div>
+      <ul class="roster" id="roster"></ul>
+      <button class="secondary pass-close" id="pass-close">Close check-in</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/api.js"></script>
 <script>
-    const token = localStorage.getItem("token");
-    const role = localStorage.getItem("role");
+  if (Session.require('ORGANIZER')) init();
 
-    // auth check
-    if (!token || role !== "ORGANIZER") {
-        window.location.href = "login.html";
+  async function init() {
+    fillTopbar();
+    document.getElementById('club-form').addEventListener('submit', createClub);
+    document.getElementById('event-form').addEventListener('submit', createEvent);
+    document.getElementById('pass-close').addEventListener('click', closePass);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closePass(); });
+    await Promise.all([loadClubs(), loadEvents()]);
+  }
+
+  // ---------- clubs ----------
+  async function loadClubs() {
+    const select = document.getElementById('ev-club');
+    try {
+      const clubs = await api('/api/clubs/mine');
+      select.innerHTML = clubs.length
+        ? clubs.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')
+        : '<option value="">Create a club first</option>';
+    } catch (err) {
+      select.innerHTML = '<option value="">Could not load clubs</option>';
     }
+  }
 
-    document.getElementById("userInfo").innerText = "Logged in as: " + localStorage.getItem("name");
-
-    let intervalId = null;
-
-    async function refreshQr(eventId) {
-        const res = await fetch(`/api/events/${eventId}/live-qr-image`, {
-            headers: { "Authorization": "Bearer " + token }
-        });
-
-        if (!res.ok) {
-            alert("Failed to load QR. Check event ID or login again.");
-            stopQr();
-            return;
+  async function createClub(e) {
+    e.preventDefault();
+    const msg = document.getElementById('club-msg');
+    hideMsg(msg);
+    try {
+      const club = await api('/api/clubs', {
+        method: 'POST',
+        body: {
+          name: document.getElementById('club-name').value,
+          description: document.getElementById('club-desc').value
         }
-
-        const blob = await res.blob();
-        document.getElementById("qrImage").src = URL.createObjectURL(blob);
+      });
+      e.target.reset();
+      showMsg(msg, `Created ${club.name}.`, 'ok');
+      await loadClubs();
+      document.getElementById('ev-club').value = club.id;
+    } catch (err) {
+      showMsg(msg, err.message);
     }
+  }
 
-    function startQr() {
-        const eventId = document.getElementById("eventId").value;
-        if (!eventId) {
-            alert("Enter event ID first");
-            return;
+  // ---------- events ----------
+  let events = [];
+
+  async function loadEvents() {
+    const box = document.getElementById('events');
+    try {
+      events = await api('/api/events/mine');
+      if (!events.length) {
+        box.innerHTML = '<p class="empty">No events yet. Create a club, then add your first event on the left.</p>';
+        return;
+      }
+      box.innerHTML = events.map(ev => {
+        const pct = Math.min(100, Math.round(ev.registeredCount / ev.capacity * 100));
+        return `
+        <article class="event">
+          <div class="date-chip"><span class="d">${fmt.day(ev.eventDate)}</span><span class="m">${fmt.month(ev.eventDate)}</span></div>
+          <div>
+            <h3>${escapeHtml(ev.title)}</h3>
+            <div class="meta">${escapeHtml(ev.clubName)}, ${escapeHtml(ev.location)}, ${fmt.time(ev.eventDate)}</div>
+            <div class="meta">${ev.registeredCount} of ${ev.capacity} seats taken</div>
+            <div class="capacity"><span style="width:${pct}%"></span></div>
+          </div>
+          <div class="actions">
+            <button class="accent" data-live="${ev.id}">Start live check-in</button>
+          </div>
+        </article>`;
+      }).join('');
+      box.querySelectorAll('[data-live]').forEach(b =>
+        b.addEventListener('click', () => openPass(Number(b.dataset.live))));
+    } catch (err) {
+      box.innerHTML = `<p class="empty">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  async function createEvent(e) {
+    e.preventDefault();
+    const msg = document.getElementById('event-msg');
+    hideMsg(msg);
+    const clubId = document.getElementById('ev-club').value;
+    if (!clubId) { showMsg(msg, 'Create a club before adding events.'); return; }
+    const date = document.getElementById('ev-date').value;
+    if (!date) { showMsg(msg, 'Pick when the event starts.'); return; }
+    try {
+      const ev = await api('/api/events', {
+        method: 'POST',
+        body: {
+          clubId: Number(clubId),
+          title: document.getElementById('ev-title').value,
+          description: document.getElementById('ev-desc').value,
+          location: document.getElementById('ev-location').value,
+          eventDate: date.length === 16 ? date + ':00' : date,
+          capacity: Number(document.getElementById('ev-cap').value)
         }
-
-        refreshQr(eventId); // turant pehli baar
-        intervalId = setInterval(() => refreshQr(eventId), 25000); // har 25 sec refresh
+      });
+      e.target.reset();
+      document.getElementById('ev-cap').value = 50;
+      await loadClubs();
+      showMsg(msg, `Created ${ev.title}.`, 'ok');
+      await loadEvents();
+    } catch (err) {
+      showMsg(msg, err.message);
     }
+  }
 
-    function stopQr() {
-        if (intervalId) {
-            clearInterval(intervalId);
-            intervalId = null;
-        }
-        document.getElementById("qrImage").src = "";
+  // ---------- live check-in pass ----------
+  const RING = 100.5; // circumference for r=16
+  let liveEventId = null, qrTimer = null, tickTimer = null, rosterTimer = null;
+  let secondsLeft = 30, windowSecs = 30, seen = new Set();
+
+  async function openPass(eventId) {
+    const ev = events.find(x => x.id === eventId);
+    liveEventId = eventId;
+    seen = new Set();
+    document.getElementById('pass-title').textContent = ev ? ev.title : 'Live check-in';
+    document.getElementById('pass-meta').textContent = ev ? `${ev.clubName}, ${ev.location}` : '';
+    document.getElementById('roster').innerHTML = '';
+    document.getElementById('pass').classList.add('show');
+    document.getElementById('pass-close').focus();
+    await refreshQr();
+    await refreshRoster();
+    tickTimer = setInterval(tick, 1000);
+    rosterTimer = setInterval(refreshRoster, 4000);
+  }
+
+  function closePass() {
+    if (!liveEventId) return;
+    clearTimeout(qrTimer); clearInterval(tickTimer); clearInterval(rosterTimer);
+    liveEventId = null;
+    document.getElementById('pass').classList.remove('show');
+    document.getElementById('qr').removeAttribute('src');
+    loadEvents();
+  }
+
+  async function refreshQr() {
+    if (!liveEventId) return;
+    try {
+      const res = await api(`/api/events/${liveEventId}/live-qr-image`, { raw: true });
+      secondsLeft = Number(res.headers.get('X-Expires-In')) || 30;
+      const blob = await res.blob();
+      const img = document.getElementById('qr');
+      if (img.src) URL.revokeObjectURL(img.src);
+      img.src = URL.createObjectURL(blob);
+      paintRing();
+      // fetch the next code right after this one rotates
+      clearTimeout(qrTimer);
+      qrTimer = setTimeout(refreshQr, secondsLeft * 1000 + 300);
+    } catch (err) {
+      alert(err.message);
+      closePass();
     }
+  }
+
+  function tick() {
+    secondsLeft = Math.max(0, secondsLeft - 1);
+    paintRing();
+  }
+
+  function paintRing() {
+    document.getElementById('ring-secs').textContent = secondsLeft;
+    document.getElementById('ring-bar').style.strokeDashoffset = RING * (1 - secondsLeft / windowSecs);
+  }
+
+  async function refreshRoster() {
+    if (!liveEventId) return;
+    try {
+      const people = await api(`/api/events/${liveEventId}/attendees`);
+      const inList = people.filter(p => p.attended)
+        .sort((a, b) => new Date(b.attendedAt) - new Date(a.attendedAt));
+      document.getElementById('count-in').textContent = inList.length;
+      document.getElementById('count-reg').textContent = people.length;
+      document.getElementById('roster').innerHTML = inList.length
+        ? inList.map(p => `<li class="${seen.has(p.registrationId) ? '' : 'new'}">
+              <span>${escapeHtml(p.name)}</span><span class="meta">${fmt.time(p.attendedAt)}</span></li>`).join('')
+        : '<li><span class="meta">Check-ins will appear here as students scan.</span></li>';
+      inList.forEach(p => seen.add(p.registrationId));
+    } catch (_) { /* keep the last roster on a transient error */ }
+  }
 </script>
 </body>
 </html>

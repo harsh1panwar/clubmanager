@@ -1,42 +1,128 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Login - Clubmanager</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClubPass · Sign in</title>
+  <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-<h2>Login</h2>
-<input type="email" id="email" placeholder="Email" /><br><br>
-<input type="password" id="password" placeholder="Password" /><br><br>
-<button onclick="login()">Login</button>
-<p id="msg"></p>
+<main class="auth">
+  <section class="auth-story">
+    <div class="brand"><span class="brand-mark"></span>ClubPass</div>
+    <div>
+      <h1>Attendance that can't be faked.</h1>
+      <p>Run your club's events end to end: registrations, check-in at the door, and certificates for the people who actually showed up.</p>
+      <ol class="steps">
+        <li><b>1</b><span>Students register for an event from their own account.</span></li>
+        <li><b>2</b><span>At the venue, the organizer's screen shows a QR code that changes every 30 seconds.</span></li>
+        <li><b>3</b><span>Each student scans it with their own phone, so a forwarded screenshot is useless.</span></li>
+        <li><b>4</b><span>Verified attendees download their certificate as a PDF.</span></li>
+      </ol>
+    </div>
+    <p class="hint">Built with Spring Boot, PostgreSQL and JWT.</p>
+  </section>
 
+  <section class="auth-form">
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab-login" aria-selected="true">Log in</button>
+      <button role="tab" id="tab-register" aria-selected="false">Create account</button>
+    </div>
+
+    <form id="login-form" novalidate>
+      <label for="login-email">Email</label>
+      <input id="login-email" type="email" autocomplete="email" required>
+      <label for="login-password">Password</label>
+      <input id="login-password" type="password" autocomplete="current-password" required>
+      <button type="submit" class="full">Log in</button>
+    </form>
+
+    <form id="register-form" hidden novalidate>
+      <label for="reg-name">Full name</label>
+      <input id="reg-name" autocomplete="name" required>
+      <label for="reg-email">Email</label>
+      <input id="reg-email" type="email" autocomplete="email" required>
+      <label for="reg-password">Password</label>
+      <input id="reg-password" type="password" autocomplete="new-password" minlength="6" required>
+      <label>I am joining as</label>
+      <div class="roles">
+        <label><input type="radio" name="role" value="ATTENDEE" checked>Student</label>
+        <label><input type="radio" name="role" value="ORGANIZER">Club organizer</label>
+      </div>
+      <button type="submit" class="full">Create account</button>
+    </form>
+
+    <div id="msg" class="msg" role="alert"></div>
+  </section>
+</main>
+
+<script src="js/api.js"></script>
 <script>
-    async function login() {
-        const email = document.getElementById("email").value;
-        const password = document.getElementById("password").value;
+  // Already signed in? Skip straight to the right dashboard.
+  if (Session.token && Session.role) redirectByRole(Session.role);
 
-        const res = await fetch("/api/auth/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password })
-        });
+  const msg = document.getElementById('msg');
+  const tabLogin = document.getElementById('tab-login');
+  const tabRegister = document.getElementById('tab-register');
+  const loginForm = document.getElementById('login-form');
+  const registerForm = document.getElementById('register-form');
 
-        if (!res.ok) {
-            document.getElementById("msg").innerText = "Login failed";
-            return;
+  function showTab(register) {
+    tabLogin.setAttribute('aria-selected', String(!register));
+    tabRegister.setAttribute('aria-selected', String(register));
+    loginForm.hidden = register;
+    registerForm.hidden = !register;
+    hideMsg(msg);
+  }
+  tabLogin.addEventListener('click', () => showTab(false));
+  tabRegister.addEventListener('click', () => showTab(true));
+
+  function redirectByRole(role) {
+    window.location.replace(role === 'ORGANIZER' ? 'organizer.html' : 'attendee.html');
+  }
+
+  loginForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    hideMsg(msg);
+    try {
+      const data = await api('/api/auth/login', {
+        method: 'POST',
+        body: {
+          email: document.getElementById('login-email').value,
+          password: document.getElementById('login-password').value
         }
-
-        const data = await res.json();
-        localStorage.setItem("token", data.token);
-        localStorage.setItem("role", data.role);
-
-        // role ke hisaab se redirect
-        if (data.role === "ORGANIZER") {
-            window.location.href = "organizer.html";
-        } else {
-            window.location.href = "attendee.html";
-        }
+      });
+      Session.save(data);
+      redirectByRole(data.role);
+    } catch (err) {
+      showMsg(msg, err.message);
     }
+  });
+
+  registerForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    hideMsg(msg);
+    const password = document.getElementById('reg-password').value;
+    if (password.length < 6) {
+      showMsg(msg, 'Use a password of at least 6 characters.');
+      return;
+    }
+    try {
+      const data = await api('/api/auth/register', {
+        method: 'POST',
+        body: {
+          name: document.getElementById('reg-name').value,
+          email: document.getElementById('reg-email').value,
+          password,
+          role: document.querySelector('input[name="role"]:checked').value
+        }
+      });
+      Session.save(data);
+      redirectByRole(data.role);
+    } catch (err) {
+      showMsg(msg, err.message);
+    }
+  });
 </script>
 </body>
 </html>

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClubPass · My events</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark"></span>ClubPass</div>
+  <div class="who"><span>Hi, <strong id="who-name"></strong></span><button class="link" id="logout">Log out</button></div>
+</header>
+
+<main class="page">
+  <section class="panel" id="scan-panel" hidden>
+    <h2 id="scan-title">Check in</h2>
+    <p class="hint">Point your camera at the code on the organizer's screen. It changes every 30 seconds, so scan the one showing right now.</p>
+    <p class="hint" id="insecure-hint" hidden>Your browser only allows the camera on https or localhost. Use "Scan a photo" or paste the code instead.</p>
+    <div class="scanner"><div id="reader"></div></div>
+    <div class="scanner-tools">
+      <button class="secondary" id="photo-btn" type="button">Scan a photo</button>
+      <input type="file" id="photo-input" accept="image/*" capture="environment" hidden>
+      <button class="secondary" id="cancel-scan" type="button">Cancel</button>
+    </div>
+    <details style="margin-top:14px">
+      <summary class="hint">Paste the code instead</summary>
+      <form id="manual-form" class="row" style="margin-top:8px">
+        <input id="manual-token" placeholder="Code from the organizer's screen" aria-label="Check-in code">
+        <button type="submit">Check in</button>
+      </form>
+    </details>
+    <div id="scan-msg" class="msg" role="alert"></div>
+  </section>
+
+  <div class="columns even">
+    <section class="panel">
+      <h2>My passes</h2>
+      <p class="hint">Events you've registered for. Check in at the venue to unlock your certificate.</p>
+      <div id="mine"></div>
+      <div id="mine-msg" class="msg" role="alert"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Upcoming events</h2>
+      <div id="events"></div>
+      <div id="events-msg" class="msg" role="alert"></div>
+    </section>
+  </div>
+</main>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="js/api.js"></script>
+<script>
+  let registrations = [];
+
+  if (Session.require('ATTENDEE')) init();
+
+  async function init() {
+    fillTopbar();
+    document.getElementById('cancel-scan').addEventListener('click', closeScanner);
+    document.getElementById('photo-btn').addEventListener('click', () => document.getElementById('photo-input').click());
+    document.getElementById('photo-input').addEventListener('change', scanPhoto);
+    document.getElementById('manual-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const t = document.getElementById('manual-token').value.trim();
+      if (t) submitCheckIn(t);
+    });
+    await refreshAll();
+  }
+
+  async function refreshAll() {
+    await loadMine();
+    await loadEvents();
+  }
+
+  // ---------- my passes ----------
+  async function loadMine() {
+    const box = document.getElementById('mine');
+    try {
+      registrations = await api('/api/registrations/me');
+      if (!registrations.length) {
+        box.innerHTML = '<p class="empty">You haven\'t registered for anything yet. Pick an event on the right.</p>';
+        return;
+      }
+      box.innerHTML = registrations.map(r => `
+        <article class="event">
+          <div class="date-chip"><span class="d">${fmt.day(r.eventDate)}</span><span class="m">${fmt.month(r.eventDate)}</span></div>
+          <div>
+            <h3>${escapeHtml(r.eventTitle)}</h3>
+            <div class="meta">${escapeHtml(r.clubName)}, ${escapeHtml(r.eventLocation)}, ${fmt.time(r.eventDate)}</div>
+            ${r.attended
+              ? `<span class="tag ok">Checked in ${fmt.time(r.attendedAt)}</span>`
+              : '<span class="tag wait">Not checked in</span>'}
+          </div>
+          <div class="actions">
+            ${r.attended
+              ? `<button class="accent" data-cert="${r.eventId}">Download certificate</button>`
+              : `<button data-scan="${r.eventId}">Check in</button>`}
+          </div>
+        </article>`).join('');
+      box.querySelectorAll('[data-scan]').forEach(b => b.addEventListener('click', () => openScanner(Number(b.dataset.scan))));
+      box.querySelectorAll('[data-cert]').forEach(b => b.addEventListener('click', () => downloadCertificate(Number(b.dataset.cert), b)));
+    } catch (err) {
+      showMsg(document.getElementById('mine-msg'), err.message);
+    }
+  }
+
+  // ---------- browse ----------
+  async function loadEvents() {
+    const box = document.getElementById('events');
+    try {
+      const now = Date.now() - 12 * 3600 * 1000;
+      const events = (await api('/api/events')).filter(ev => new Date(ev.eventDate).getTime() > now);
+      const mine = new Set(registrations.map(r => r.eventId));
+      if (!events.length) {
+        box.innerHTML = '<p class="empty">No upcoming events right now. Check back once clubs publish their next session.</p>';
+        return;
+      }
+      box.innerHTML = events.map(ev => {
+        const full = ev.registeredCount >= ev.capacity;
+        let action;
+        if (mine.has(ev.id)) action = '<span class="tag ok">Registered</span>';
+        else if (full) action = '<span class="tag full">Full</span>';
+        else action = `<button class="secondary" data-reg="${ev.id}">Register</button>`;
+        return `
+        <article class="event">
+          <div class="date-chip"><span class="d">${fmt.day(ev.eventDate)}</span><span class="m">${fmt.month(ev.eventDate)}</span></div>
+          <div>
+            <h3>${escapeHtml(ev.title)}</h3>
+            <div class="meta">${escapeHtml(ev.clubName)}, ${escapeHtml(ev.location)}, ${fmt.dateTime(ev.eventDate)}</div>
+            ${ev.description ? `<div class="meta">${escapeHtml(ev.description)}</div>` : ''}
+            <div class="meta">${Math.max(0, ev.capacity - ev.registeredCount)} seats left</div>
+          </div>
+          <div class="actions">${action}</div>
+        </article>`;
+      }).join('');
+      box.querySelectorAll('[data-reg]').forEach(b => b.addEventListener('click', () => register(Number(b.dataset.reg), b)));
+    } catch (err) {
+      showMsg(document.getElementById('events-msg'), err.message);
+    }
+  }
+
+  async function register(eventId, button) {
+    button.disabled = true;
+    const msg = document.getElementById('events-msg');
+    hideMsg(msg);
+    try {
+      await api(`/api/events/${eventId}/register`, { method: 'POST' });
+      await refreshAll();
+    } catch (err) {
+      showMsg(msg, err.message);
+      button.disabled = false;
+    }
+  }
+
+  // ---------- QR check-in ----------
+  let scanner = null, scanEventId = null, busy = false;
+
+  async function openScanner(eventId) {
+    scanEventId = eventId;
+    const reg = registrations.find(r => r.eventId === eventId);
+    document.getElementById('scan-title').textContent = 'Check in: ' + (reg ? reg.eventTitle : '');
+    hideMsg(document.getElementById('scan-msg'));
+    document.getElementById('manual-token').value = '';
+    const panel = document.getElementById('scan-panel');
+    panel.hidden = false;
+    panel.scrollIntoView({ behavior: 'smooth' });
+
+    if (!window.isSecureContext) {
+      document.getElementById('insecure-hint').hidden = false;
+      return;
+    }
+    try {
+      scanner = new Html5Qrcode('reader');
+      await scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 240 }, onScan);
+    } catch (err) {
+      showMsg(document.getElementById('scan-msg'),
+        'Could not open the camera. Allow camera access, or use "Scan a photo".');
+    }
+  }
+
+  async function stopCamera() {
+    if (scanner) {
+      try { await scanner.stop(); } catch (_) {}
+      try { scanner.clear(); } catch (_) {}
+      scanner = null;
+    }
+  }
+
+  async function closeScanner() {
+    await stopCamera();
+    scanEventId = null;
+    document.getElementById('scan-panel').hidden = true;
+  }
+
+  function onScan(text) {
+    if (!busy) submitCheckIn(text.trim());
+  }
+
+  async function scanPhoto(e) {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    await stopCamera();
+    try {
+      const reader = new Html5Qrcode('reader');
+      const text = await reader.scanFile(file, false);
+      reader.clear();
+      submitCheckIn(text.trim());
+    } catch (_) {
+      showMsg(document.getElementById('scan-msg'), 'No QR code found in that photo. Try again closer to the screen.');
+    }
+  }
+
+  async function submitCheckIn(token) {
+    if (!scanEventId) return;
+    busy = true;
+    const msg = document.getElementById('scan-msg');
+    try {
+      await api(`/api/events/${scanEventId}/check-in`, { method: 'POST', body: { token } });
+      await stopCamera();
+      showMsg(msg, 'You\'re checked in. Your certificate is ready below.', 'ok');
+      await loadMine();
+      setTimeout(closeScanner, 2500);
+    } catch (err) {
+      showMsg(msg, err.message);
+      if (err.message.includes('Already checked in')) { await stopCamera(); await loadMine(); }
+    } finally {
+      // short pause so one bad scan doesn't fire a burst of requests
+      setTimeout(() => { busy = false; }, 1500);
+    }
+  }
+
+  // ---------- certificate ----------
+  async function downloadCertificate(eventId, button) {
+    button.disabled = true;
+    const msg = document.getElementById('mine-msg');
+    hideMsg(msg);
+    try {
+      const res = await api(`/api/events/${eventId}/certificate`, { raw: true });
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `certificate-event-${eventId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (err) {
+      showMsg(msg, err.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+</script>
+</body>
+</html>
